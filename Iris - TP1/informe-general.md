@@ -232,13 +232,38 @@ Dividimos el dataset en **80% entrenamiento (120 muestras) y 20% prueba (30 mues
 - **`stratify=y`**: garantiza que la proporción de clases sea idéntica en train y test. Sin esto, el split podría quedar desbalanceado por azar. Con stratify: train tiene 40/40/40 y test tiene 10/10/10.
 - **`random_state=42` igual en todos los experimentos**: garantiza que todos los modelos se evalúan sobre **exactamente el mismo conjunto de test**. Si usáramos semillas distintas, los modelos verían conjuntos de test distintos y no sería una comparación justa.
 
-### Elección de métricas
+### Elección de métricas y justificación de la prioridad
 
 Para este problema usamos **accuracy** como métrica principal y **F1-macro** como complemento:
 
 - **Accuracy** es válida porque el dataset es balanceado. Con 10 muestras por clase en test, un error en cualquier especie pesa igual (3.33%).
 - **F1-macro** promedia el F1 de cada clase por igual. Es más robusta que accuracy cuando algún modelo falla completamente con una clase (como el experimento de solo binarias, donde el modelo no puede predecir *versicolor*). En esos casos, accuracy puede ser engañosa pero F1-macro lo detecta.
 - **No usamos recall** como métrica principal porque no hay un costo asimétrico entre errores: clasificar una *versicolor* como *virginica* no es más grave que el error inverso. En un diagnóstico médico, priorizaríamos recall para minimizar Falsos Negativos. En un problema botánico-académico, el rendimiento balanceado es suficiente.
+
+### ¿Qué métrica priorizar y por qué?
+
+Esta es una decisión que depende del **contexto del problema**, no del algoritmo. En este trabajo priorizamos **accuracy** por las siguientes razones:
+
+**1. El dataset está perfectamente balanceado (50 muestras por especie).**
+Con clases balanceadas, accuracy refleja fielmente el rendimiento global. Si hubiera desbalance —por ejemplo, 90 *setosa* y 5 *versicolor*— un modelo que predice siempre *setosa* tendría 90% de accuracy sin aprender nada. Acá eso no es posible: las 3 clases tienen el mismo peso.
+
+**2. No hay un costo asimétrico entre los tipos de error.**
+En este problema, clasificar una *virginica* como *versicolor* tiene el mismo "costo" que el error inverso. No hay una especie más importante que otra ni consecuencias graves por confundirlas. Si fuera un problema médico (ej: clasificar un tumor como benigno cuando es maligno), priorizaríamos **recall** para minimizar los Falsos Negativos — un error de ese tipo puede costar una vida. En botánica académica, ese costo asimétrico no existe.
+
+**3. F1-macro como métrica de seguridad.**
+Aunque accuracy es la métrica principal, F1-macro actúa como verificación. El experimento de solo binarias lo ilustra claramente: ese modelo tiene 66.67% de accuracy pero F1-macro de 55.56% — la diferencia revela que *versicolor* no está siendo clasificada en absoluto. F1-macro detecta cuando un modelo sacrifica una clase para optimizar el promedio global.
+
+**Resumen de criterios para elegir métricas en clasificación:**
+
+| Situación | Métrica recomendada |
+|---|---|
+| Clases balanceadas, errores simétricos | Accuracy |
+| Clases desbalanceadas | F1-macro o F1-weighted |
+| Costo alto de Falsos Negativos (ej: diagnóstico) | Recall |
+| Costo alto de Falsos Positivos (ej: spam) | Precision |
+| Evaluación de capacidad discriminativa por clase | AUC-ROC |
+
+En este TP, las condiciones del primer caso se cumplen. Accuracy es la elección correcta, respaldada por F1-macro para detectar comportamientos anómalos por clase.
 
 ### Estrategia de experimentos
 
@@ -252,9 +277,9 @@ Los 11 experimentos no son arbitrarios. Siguen una lógica progresiva basada en 
 | **Boosting** | Gradient Boosting, AdaBoost, XGBoost | ¿Los métodos de boosting superan al Random Forest? |
 | **Pipeline complejo** | RF→GB tuneado, PCA→GB | ¿Combinar selección/reducción + tuneo mejora los resultados? |
 
-### Uso de Pipeline de sklearn
+### Escalado explícito de datos
 
-Para los experimentos de KNN y PCA→GB se usa `Pipeline` de sklearn. La ventaja no es solo organizativa: **evita data leakage**. Si escaláramos los datos antes del split y luego los dividiéramos, el `StandardScaler` habría "visto" las muestras del test durante el ajuste de la media y desvío. Con Pipeline, el escalado y la reducción dimensional se ajustan **únicamente sobre el conjunto de entrenamiento** y se aplican transformados al test. Esto garantiza que la evaluación refleja la performance real del modelo ante datos que nunca vio.
+Para los experimentos de KNN y PCA→GB, el escalado y la reducción dimensional se realizan en pasos explícitos y separados. La clave es usar siempre `.fit_transform()` sobre el conjunto de entrenamiento y `.transform()` sobre el de test — nunca `.fit_transform()` sobre el test. Si ajustáramos el `StandardScaler` sobre todos los datos (incluyendo el test), el scaler "vería" las muestras de test durante el ajuste de la media y el desvío, lo que se conoce como **data leakage** y produce evaluaciones optimistas que no reflejan la performance real del modelo ante datos nuevos.
 
 ---
 
@@ -344,11 +369,11 @@ F1-macro de 55% es engañoso en este caso: el modelo tiene 100% de accuracy para
 
 ---
 
-### Experimento 6 — KNN Pipeline: ¿un algoritmo distinto da mejor resultado?
+### Experimento 6 — KNN: ¿un algoritmo distinto da mejor resultado?
 
-**Setup:** `KNeighborsClassifier` dentro de un `Pipeline([StandardScaler, KNN])`, con las 4 features originales. La selección de k se hace por validación cruzada de 5 folds sobre el conjunto de entrenamiento.
+**Setup:** `KNeighborsClassifier` con las 4 features originales, escaladas previamente con `StandardScaler`. La selección de k se hace por validación cruzada de 5 folds sobre el conjunto de entrenamiento.
 
-**¿Por qué Pipeline acá?** KNN mide distancias entre puntos. Si una variable va de 1 a 7 y otra de 0.1 a 2.5, la primera dominaría artificialmente el cálculo de distancias. El StandardScaler normaliza todas las variables al mismo rango antes de calcular distancias. Sin Pipeline, el escalado se ajustaría sobre todos los datos incluyendo el test — data leakage.
+**¿Por qué escalar antes de KNN?** KNN mide distancias entre puntos. Si una variable va de 1 a 7 y otra de 0.1 a 2.5, la primera dominaría artificialmente el cálculo de distancias. El `StandardScaler` normaliza todas las variables antes de calcular distancias. El escalado se ajusta solo sobre los datos de entrenamiento y se aplica al test sin re-ajustar, evitando data leakage.
 
 **Selección de k:**
 
@@ -435,29 +460,29 @@ El resultado del KNN es comparable al RF baseline pero inferior al RF con featur
 
 Se filtran las features con importancia > 5% según el experimento 2. Resultado: **9 features** seleccionadas, todas del pétalo o derivadas de él (`area_petalo`, `ancho_petalo_2`, `suma_petalo`, `ancho_petalo`, `longitud_petalo`, `longitud_petalo_2`, `diff_petalo`, `es_petalo_pequeno`, `diff_sepalo`).
 
-**Paso 2 — Búsqueda de hiperparámetros con StratifiedKFold:**
+**Paso 2 — Búsqueda de hiperparámetros con `StratifiedKFold` (5 folds):**
 
 | n_estimators | learning_rate | max_depth | F1-macro (CV 5-fold) |
 |---|---|---|---|
-| 50 | 0.10 | 2 | 0.9482 |
-| 100 | 0.10 | 3 | 0.9482 |
-| **150** | **0.05** | **3** | **0.9580** |
+| **50** | **0.10** | **2** | **0.9582** |
+| 100 | 0.10 | 3 | 0.9582 |
+| 150 | 0.05 | 3 | 0.9582 |
 | 200 | 0.05 | 4 | 0.9496 |
 
-Mejores parámetros: 150 estimadores, learning rate 0.05, profundidad máxima 3. El learning rate más bajo con más estimadores permite un aprendizaje más gradual y generaliza mejor. Profundidad 4 empieza a overfittear levemente.
+Las tres primeras combinaciones empatan en 0.9582. Se elige `n_estimators=50` porque con menos árboles se obtiene el mismo resultado — más simple y más rápido de entrenar. Es el principio de parsimonia aplicado al tuneo de hiperparámetros.
 
 **Paso 3 — Modelo final:**
-- Accuracy: **96.67%** | F1-macro: **96.66%**
-- Tiempo entrenamiento: 134.0ms
-- **Total errores: 1 sobre 30 muestras**
+- Accuracy: **93.33%** | F1-macro: **93.33%**
+- Tiempo entrenamiento: 36ms
+- **Total errores: 2 sobre 30 muestras**
 
-**Interpretación:** Mismo rendimiento máximo, alcanzado con 9 features seleccionadas sistemáticamente y parámetros optimizados por validación cruzada. El tuneo no mejoró el rendimiento final (el techo del dataset es el límite, no los hiperparámetros), pero el proceso es metodológicamente correcto y se vería más impacto en datasets más complejos donde los hiperparámetros sí marcan diferencia.
+**Interpretación:** A pesar de usar las mejores features según el RF y haber buscado los mejores hiperparámetros, el resultado es 93.33% — por debajo del RF directo con todas las features (96.67%). En un dataset de solo 120 muestras de entrenamiento, el proceso de selección de features + tuneo puede introducir varianza adicional que no se traduce en mejor generalización. En datasets más grandes, este pipeline metodológico marcaría más diferencia.
 
 ---
 
-### Experimento 11 — Pipeline PCA → Gradient Boosting: ¿la reducción dimensional penaliza?
+### Experimento 11 — PCA + Gradient Boosting: ¿la reducción dimensional penaliza?
 
-**Setup:** `Pipeline([StandardScaler → PCA(n_components=2) → GradientBoosting])` con las 4 features originales.
+**Setup:** Tres pasos explícitos: `StandardScaler` → `PCA(n_components=2)` → `GradientBoosting`, cada uno ajustado solo sobre los datos de entrenamiento. Features originales (4).
 
 **Motivación:** El PCA mostró que 2 componentes capturan el 95.8% de la varianza. ¿Es suficiente ese 95.8% para clasificar bien, o el 4.2% restante contiene información crítica?
 
@@ -506,17 +531,17 @@ El AUC como complemento a la accuracy es valioso porque mide la capacidad de dis
 
 | # | Modelo | Features | N° feat. | Accuracy | F1-macro | T. train | T. pred | Interpretabilidad |
 |---|---|---|---|---|---|---|---|---|
-| 1 | RF Todas features | todas (15) | 15 | **0.9667** | **0.9666** | 52.3ms | 2.63ms | Media |
-| 2 | RF Solo pétalo | petalo (4) | 4 | **0.9667** | **0.9666** | 49.8ms | 1.95ms | Media |
-| 3 | Gradient Boosting | todas (15) | 15 | **0.9667** | **0.9666** | 124.5ms | 1.81ms | Baja |
-| 4 | Pipeline RF→GB tuneado | top features (9) | 9 | **0.9667** | **0.9666** | 134.0ms | 1.84ms | Baja |
-| 5 | RF Orig + Ratios | orig + ratios (6) | 6 | 0.9333 | 0.9333 | 49.0ms | 1.95ms | Media |
-| 6 | AdaBoost | todas (15) | 15 | 0.9333 | 0.9333 | 56.7ms | 3.94ms | Baja |
-| 7 | XGBoost | todas (15) | 15 | 0.9333 | 0.9333 | 76.6ms | 1.63ms | Baja |
-| 8 | KNN Pipeline (k=5) | originales (4) | 4 | 0.9333 | 0.9327 | **1.6ms** | 2.67ms | Alta |
-| 9 | RF Baseline | originales (4) | 4 | 0.9000 | 0.8997 | 51.2ms | 1.98ms | Media |
-| 10 | Pipeline PCA→GB | PCA 2 componentes | 2 | 0.8667 | 0.8667 | 156.1ms | 1.14ms | Muy baja |
-| 11 | RF Solo binarias | binarias (2) | 2 | 0.6667 | 0.5556 | 97.8ms | 2.89ms | Alta |
+| 1 | RF Todas features | todas (15) | 15 | **0.9667** | **0.9666** | 47ms | 2.2ms | Media |
+| 2 | RF Solo pétalo | petalo (4) | 4 | **0.9667** | **0.9666** | 46ms | 1.8ms | Media |
+| 3 | Gradient Boosting | todas (15) | 15 | **0.9667** | **0.9666** | 122ms | 1.0ms | Baja |
+| 4 | RF Orig + Ratios | orig + ratios (6) | 6 | 0.9333 | 0.9333 | 46ms | 1.8ms | Media |
+| 5 | AdaBoost | todas (15) | 15 | 0.9333 | 0.9333 | 55ms | 4.0ms | Baja |
+| 6 | XGBoost | todas (15) | 15 | 0.9333 | 0.9333 | 71ms | 1.3ms | Baja |
+| 7 | RF→GB tuneado | top features (9) | 9 | 0.9333 | 0.9333 | 36ms | 0.7ms | Baja |
+| 8 | KNN (k=5) | originales (4) | 4 | 0.9333 | 0.9327 | **0.5ms** | 1.6ms | Alta |
+| 9 | RF Baseline | originales (4) | 4 | 0.9000 | 0.8997 | 46ms | 1.8ms | Media |
+| 10 | PCA + GB | PCA 2 componentes | 2 | 0.8667 | 0.8667 | 90ms | 0.5ms | Muy baja |
+| 11 | RF Solo binarias | binarias (2) | 2 | 0.6667 | 0.5556 | 45ms | 1.8ms | Alta |
 
 **Escala de interpretabilidad:**
 - **Alta**: el razonamiento del modelo es directamente explicable (KNN: "clasifiqué por los 5 vecinos más cercanos"; binarias: "si longitud_petalo < 2, es setosa").
@@ -552,7 +577,7 @@ Cuatro modelos distintos — RF con todas las features, RF con solo pétalo, Gra
 
 **Random Forest**: el modelo más equilibrado del trabajo. Alcanza el máximo rendimiento, es rápido (50ms), tiene interpretabilidad media a través de la importancia de features, y no requiere escalado previo. Es el candidato natural para este tipo de problema.
 
-**KNN**: el resultado más sorprendente en términos de velocidad. Con 1.6ms de entrenamiento y 93.33% de accuracy, es el mejor trade-off rendimiento/velocidad del trabajo. La clave es el Pipeline con StandardScaler: sin escalado, KNN daría resultados mucho peores porque las variables del sépalo dominarían el cálculo de distancias.
+**KNN**: el resultado más sorprendente en términos de velocidad. Con 0.5ms de entrenamiento y 93.33% de accuracy, es el mejor trade-off rendimiento/velocidad del trabajo. La clave es el escalado previo con StandardScaler: sin él, KNN daría resultados mucho peores porque las variables del sépalo dominarían artificialmente el cálculo de distancias.
 
 **Gradient Boosting (sklearn)**: igual rendimiento que el RF pero 2.4 veces más lento. En Iris, la mayor expresividad del boosting no agrega valor porque el problema es demasiado simple. El boosting brilla en datasets grandes y ruidosos donde reducir el sesgo iterativamente sí marca diferencia.
 
